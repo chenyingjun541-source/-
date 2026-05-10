@@ -1,0 +1,330 @@
+# 本地开发前后端运行框架
+
+## 一、启动模式总览
+
+| 模式 | 启动方式 | 前端连接 | 热插拔 | 适用场景 |
+|------|----------|----------|--------|----------|
+| **直连模式** | `direct.bat` | 直接连接6112 | ❌ 不加载 | 调试airi原生功能 |
+| **代理模式** 🔴 | `proxy.bat` | 连接5137 | ✅ 加载 | 启用houduan自定义逻辑 |
+
+---
+
+## 二、直连模式
+
+### 2.1 启动流程
+
+```
+双击 direct.bat
+    │
+    ▼
+启动 Docker Desktop (如未启动)
+    │
+    ▼
+执行 docker-compose up -d
+    │
+    ├──→ airi-server (6112)  ←── 前端直接连接
+    │
+    └──→ PostgreSQL (5432)
+```
+
+### 2.2 数据流
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          直连模式                                │
+│                                                                  │
+│   前端(5173)  ──────────────────────────────────► Docker后端   │
+│      │                                              (6112)       │
+│      │ VITE_SERVER_URL                              Airi原生代码  │
+│      └───────────────────────────────────────────────────────►   │
+│                                                                  │
+│   特点：                                                        │
+│   • 速度快，无中间层                                            │
+│   • 无法干预消息处理                                            │
+│   • 用于测试airi原生功能                                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2.3 环境配置
+
+```bash
+# .env (airi前端)
+VITE_SERVER_URL=http://localhost:6112
+```
+
+---
+
+## 三、代理模式 (核心模式)
+
+### 3.1 启动流程
+
+```
+双击 proxy.bat
+    │
+    ▼
+启动 Docker Desktop (如未启动)
+    │
+    ▼
+执行 docker-compose up -d (6112)
+    │
+    ▼
+启动 Node.js 代理服务器 (5137)
+    │
+    ├── 加载 hot-swap.ts
+    ├── 初始化智能路由
+    └── 初始化本地模型
+    │
+    ▼
+前端连接 5137
+```
+
+### 3.2 数据流
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          代理模式 🔴                             │
+│                                                                  │
+│   用户浏览器                                                     │
+│      │                                                          │
+│      ▼                                                          │
+│   前端(5173) ───────► 代理层(5137) ──────────► Docker后端(6112) │
+│      │                  │                      │                │
+│      │                  │ hot-swap.ts          │ Airi原生代码   │
+│      │                  │ 智能路由             │                │
+│      │                  │ 本地模型             │                │
+│      │                  │ 记忆系统             │                │
+│      │                  │                      │                │
+│      │                  ▼                      │                │
+│      │           ┌─────────────┐               │                │
+│      │           │  云端模型    │ ◄──────────────┘                │
+│      │           │  (百炼/DeepSeek)                            │
+│      │           └─────────────┘                              │
+│      │                  │                                     │
+│      │                  ▼                                     │
+│      │           存档到本地文件                                  │
+│      │                                                     │
+│   特点：                                                         │
+│   • 消息经过热插拔层，可干预                                     │
+│   • 智能路由自动选择本地/云端                                    │
+│   • 支持记忆系统和人格系统                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 3.3 环境配置
+
+```bash
+# .env (airi前端)
+VITE_SERVER_URL=http://localhost:5137
+
+# .env (houduan代理)
+PORT=5137
+BACKEND_URL=http://localhost:6112
+CLOUD_LLM_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+```
+
+---
+
+## 四、热插拔插槽 (hot-swap.ts)
+
+### 4.1 接口定义
+
+```typescript
+// 消息结构
+interface HotSwapMessage {
+  id: string
+  type: 'user' | 'ai'
+  content: string
+  timestamp: number
+}
+
+// 结果结构
+interface HotSwapResult {
+  content: string
+  modified: boolean
+  metadata?: Record<string, any>
+}
+
+// 核心导出函数
+export async function onMessage(message: HotSwapMessage): Promise<HotSwapResult>
+export async function onInit(): Promise<void>
+export async function onDestroy(): Promise<void>
+export async function onConversationStart(conversationId: string): Promise<void>
+export async function onConversationEnd(conversationId: string): Promise<void>
+```
+
+### 4.2 消息处理流程
+
+```typescript
+// proxy/index.ts 中的处理流程
+
+// 1. 收到用户消息
+app.post('/api/chat', async (req, res) => {
+  const message: HotSwapMessage = {
+    id: generateId(),
+    type: 'user',
+    content: req.body.message,
+    timestamp: Date.now()
+  }
+
+  // 2. 调用热插拔钩子
+  const result = await onMessage(message)
+
+  // 3. 获取路由结果
+  const routeResult = result.metadata?.route
+
+  // 4. 根据路由分发到不同模型
+  if (routeResult?.target === 'local') {
+    // 本地模型处理
+  } else if (routeResult?.target === 'cloud-quick') {
+    // 云端快速处理
+  } else if (routeResult?.target === 'cloud-deep') {
+    // 云端深度处理 + 存档
+  }
+
+  // 5. 返回结果
+  res.json({ response: result.content })
+})
+```
+
+---
+
+## 五、智能路由 (smartRouter)
+
+### 5.1 路由决策流程
+
+```
+用户消息
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│              三方并行竞速                           │
+│                                                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │
+│  │ 关键词匹配   │  │ 学习词库    │  │ 本地模型   │  │
+│  │ (10ms)     │  │ (10ms)     │  │ (3秒超时)  │  │
+│  └──────┬──────┘  └──────┬──────┘  └─────┬──────┘  │
+│         │                │                │          │
+│         └────────────────┼────────────────┘          │
+│                          ▼                          │
+│                   选举胜出者                         │
+│                                                  │
+│  优先级：关键词 > 学习词 > 本地模型 > 默认           │
+└─────────────────────────────────────────────────────┘
+    │
+    ├── local ────→ 本地模型 (Qwen-1.8B) <2秒响应
+    ├── cloud-quick ──→ 云端快速 (百炼) <5秒响应
+    └── cloud-deep ──→ 云端深度 (DeepSeek) 质量优先
+```
+
+### 5.2 路由目标说明
+
+| 目标 | 处理方式 | 响应时间 | 适用场景 |
+|------|----------|----------|----------|
+| `local` | Ollama本地模型 | <2秒 | 简单问候、脱敏润色 |
+| `cloud-quick` | 阿里云百炼 | <5秒 | 日常对话、情感回应 |
+| `cloud-deep` | DeepSeek | 不限时 | 记忆提炼、复杂推理 |
+
+---
+
+## 六、端口说明
+
+| 端口 | 服务 | 说明 |
+|------|------|------|
+| **5173** | Vite前端 | 用户访问地址 |
+| **6112** | Docker后端 | Airi原生API |
+| **5137** | Node代理 | 热插拔逻辑入口 |
+
+### 端口连接关系
+
+```
+浏览器:5173
+    │
+    ├── 直连模式 ────→ :6112 (Docker)
+    │
+    └── 代理模式 ────→ :5137 (Node)
+                            │
+                            ├── hot-swap.ts
+                            ├── smartRouter
+                            │
+                            └── :6112 (Docker)
+                                  │
+                                  └── 百炼/DeepSeek
+```
+
+---
+
+## 七、日志监控
+
+### 7.1 代理日志
+
+```bash
+# 代理控制台显示
+[📤] [10:30:15] 请求: POST /api/chat
+[📥] [10:30:16] 响应: 200 OK (1.2s)
+[🧭] [10:30:16] 路由: cloud-quick (keyword: 问候)
+[🔌] [10:30:16] WebSocket: 消息转发
+```
+
+### 7.2 监控页面
+
+打开 `houduan/monitor.html` 可以看到：
+- 实时通信日志
+- 路由决策记录
+- 统计信息
+
+---
+
+## 八、开发调试
+
+### 8.1 修改热插拔代码后
+
+```bash
+# 刷新浏览器即可加载新代码
+# 不需要重启代理
+```
+
+### 8.2 查看路由决策
+
+```typescript
+// 在 hot-swap.ts 中
+console.log('[houduan] 路由结果:', {
+  target: routeResult.target,
+  source: routeResult.source,
+  reason: routeResult.reason
+})
+```
+
+### 8.3 切换模式
+
+```bash
+# 切换到直连模式
+双击 direct.bat
+
+# 切换到代理模式
+双击 proxy.bat
+```
+
+---
+
+## 九、完整启动流程
+
+```
+1. 启动 Docker Desktop
+
+2. 选择模式
+   │
+   ├── 双击 direct.bat ──→ 仅airi原生功能
+   │
+   └── 双击 proxy.bat ──→ 启用houduan全部功能
+        │
+        ├── Docker后端 (6112)
+        ├── Node代理 (5137)
+        ├── hot-swap.ts 加载
+        └── 智能路由初始化
+
+3. 打开浏览器
+   http://localhost:5173
+
+4. 如需监控
+   打开 houduan/monitor.html
+```

@@ -1,0 +1,781 @@
+# 前端桌宠实现 - 开发逻辑与思想
+
+## 一、桌宠是什么？
+
+桌宠就是一个"数字木偶"，它由四个部分组成：
+
+**第一部分：身体（Live2D 模型）**
+皮套，已经包含了骨骼、网格、皮肤等
+- 你不需要开发这部分，只需要"使用"它
+
+**第二部分：牵线的手（权重系统）**
+- 这是你的核心工作
+- 通过给不同部位分配"权重值"来控制动作
+- 权重值就是一个 0 到 1 之间的数字
+
+**第三部分：大脑（交互逻辑）**
+- 决定什么时候做什么动作
+- 根据用户的行为（点击、拖拽、说话）来决策
+
+**第四部分：技能（工具调用）**
+- 让桌宠能做更多事，比如搜索网页、播放音乐、设置提醒
+- 通过对接你的 houduan 代理来实现智能
+
+---
+
+## 二、Live2D 是怎么动的？
+
+### 传统 3D 模型 vs Live2D 模型
+
+**传统 3D 模型**：像"关节人偶"
+- 有骨骼、关节
+- 靠骨骼转动来变形
+- 比如：手臂绕着肩膀转
+
+**Live2D 模型**：像"橡皮泥"
+- 没有真正的骨骼
+- 靠拉扯网格顶点来变形
+- 比如：把脸部的网格往右拉，脸就向右转
+
+### 权重是什么？
+
+权重就是一个数字，范围在 0 到 1 之间（有些参数可以是 -1 到 1）。
+
+**举例说明**：
+
+假设有一个参数叫"头部左右转动"（ParamAngleX）：
+
+- 权重 = 0 → 头不转，正对着你
+- 权重 = 0.5 → 头转到一半，微微侧着
+- 权重 = 1 → 头转到最大，完全侧着
+
+**再举例**：
+
+假设有一个参数叫"嘴巴张开"（ParamMouthOpenY）：
+
+- 权重 = 0 → 嘴巴闭着
+- 权重 = 0.3 → 嘴巴微张
+- 权重 = 0.8 → 嘴巴大张
+- 权重 = 1 → 嘴巴张到最大
+
+### 常见的参数类型
+
+**头部相关**：
+- 左右转动：头向左转或向右转
+- 上下转动：抬头或低头
+- 倾斜转动：头向左歪或向右歪
+
+**眼睛相关**：
+- 左眼开合：左眼睁开或闭上
+- 右眼开合：右眼睁开或闭上
+- 眼球移动：眼球向左、右、上、下看
+
+**嘴巴相关**：
+- 嘴巴开合：嘴巴张开或闭上
+- 嘴巴形状：微笑、撇嘴、生气等
+
+**眉毛相关**：
+- 左眉上下：左眉上扬或下压
+- 右眉上下：右眉上扬或下压
+
+**身体相关**：
+- 身体左右倾斜
+- 身体前后倾斜
+- 身体旋转
+
+**呼吸**：
+- 呼吸起伏：胸口上下起伏
+
+**特殊效果**：
+- 头发飘动
+- 衣服摆动
+- 脸红
+
+---
+
+## 三、权重系统详解
+
+### 权重分配原理
+
+**核心思想**：给不同部位分配不同权重，实现"有的部位动得多，有的动得少"。
+
+**举例：开心时的权重分配**
+
+当桌宠开心时，你会这样分配权重：
+
+- 头部：轻微晃动（权重 0.2，表示动得不多）
+- 眼睛：睁大（权重 0.8，表示睁得很大）
+- 嘴巴：微笑（权重 0.5，表示微笑程度中等）
+- 眉毛：上扬（权重 0.4，表示微微上扬）
+- 身体：轻微前倾（权重 0.1，表示动得很少）
+- 呼吸：加快（权重 0.6，表示呼吸明显）
+
+**举例：说话时的权重分配**
+
+当桌宠说话时，你会这样分配权重：
+
+- 嘴巴：不断开合（权重在 0 到 0.8 之间变化）
+- 眼睛：正常（权重 0.5）
+- 头部：轻微晃动（权重 0.2）
+- 其他部位：保持不动
+
+### 动作混合机制
+
+**问题**：如果同时有多个动作，怎么处理？
+
+比如：桌宠在呼吸的同时，还要说话，还要眨眼。这三个动作同时存在，会不会冲突？
+
+**解决**：动作混合器
+
+动作混合器的工作原理是：
+
+1. 每个动作都有一个"优先级"
+2. 优先级高的动作影响大，优先级低的动作影响小
+3. 最终权重 = 所有动作的权重 × 各自的优先级，然后加起来
+
+**举例**：
+
+假设有三个动作同时存在：
+
+- 呼吸：权重 0.5，优先级 0.3（低优先级，因为呼吸是背景动作）
+- 说话：权重 0.8，优先级 0.7（高优先级，因为说话是主要动作）
+- 眨眼：权重 0（闭上），优先级 1.0（最高优先级，因为眨眼是瞬间动作）
+
+混合后的结果：
+
+- 嘴巴的最终权重 = 呼吸的 0.5 × 0.3 + 说话的 0.8 × 0.7 = 0.15 + 0.56 = 0.71
+- 眼睛的最终权重 = 眨眼的 0 × 1.0 = 0（眨眼优先级最高，所以眼睛闭上）
+
+### 权重过渡（平滑动画）
+
+**问题**：如果权重从 0 直接跳到 1，动作会很生硬，像机器人一样。
+
+**解决**：让权重"慢慢变"，而不是"瞬间变"。
+
+**举例**：
+
+假设桌宠要从"头不转"变成"头转到最大"：
+
+- 生硬的方式：权重直接从 0 变成 1（瞬间完成，很生硬）
+- 平滑的方式：权重从 0 → 0.1 → 0.2 → 0.3 → ... → 1（慢慢变化，很自然）
+
+**平滑过渡的原理**：
+
+每一帧（每一瞬间）只变化一点点，比如每次变化 10%：
+
+- 第 1 帧：权重 = 0 + (1 - 0) × 0.1 = 0.1
+- 第 2 帧：权重 = 0.1 + (1 - 0.1) × 0.1 = 0.19
+- 第 3 帧：权重 = 0.19 + (1 - 0.19) × 0.1 = 0.27
+- ...
+- 第 N 帧：权重接近 1
+
+这样看起来就很平滑自然了。
+
+---
+
+## 四、JSON 动作文件
+
+### 什么是 JSON 动作文件？
+
+JSON 动作文件就是一个"动作说明书"，告诉程序：
+
+- 这个动作叫什么名字
+- 这个动作持续多久
+- 这个动作要不要循环播放
+- 这个动作中，每个部位的权重是多少
+
+### 动作文件的结构
+
+一个动作文件包含多个动作，每个动作有这些信息：
+
+**动作名称**：比如"待机"、"开心"、"说话"
+
+**是否循环**：
+- 循环：比如"待机"动作，要一直播放
+- 不循环：比如"开心"动作，播放一次就结束
+
+**持续时间**：比如 3000 毫秒（3 秒）
+
+**权重配置**：每个部位的权重值
+
+### 举例说明
+
+**待机动作**：
+
+- 名称：待机
+- 循环：是
+- 持续时间：3000 毫秒
+- 权重：
+  - 呼吸：0.5（中等呼吸）
+  - 头部左右转动：0.1（轻微晃动）
+
+**开心动作**：
+
+- 名称：开心
+- 循环：否
+- 持续时间：2000 毫秒
+- 权重：
+  - 左眼开合：0.8（睁大）
+  - 右眼开合：0.8（睁大）
+  - 嘴巴形状：0.5（微笑）
+  - 左眉上扬：0.4
+  - 右眉上扬：0.4
+
+**说话动作**：
+
+- 名称：说话
+- 循环：是
+- 持续时间：500 毫秒
+- 权重：
+  - 嘴巴开合：使用"关键帧"动画
+    - 第 0 毫秒：权重 0（闭嘴）
+    - 第 100 毫秒：权重 0.8（张嘴）
+    - 第 200 毫秒：权重 0.2（半闭）
+    - 第 300 毫秒：权重 0.6（张嘴）
+    - 第 400 毫秒：权重 0.1（半闭）
+    - 第 500 毫秒：权重 0（闭嘴）
+
+**关键帧动画**：就是在一段时间内，权重按照预设的时间点变化。比如说话时，嘴巴不是一直张着，而是不断开合，模拟说话的样子。
+
+---
+
+## 五、交互逻辑设计
+
+### 状态机
+
+**什么是状态机？**
+
+状态机就是桌宠的"行为模式"。桌宠在不同状态下，会做不同的动作。
+
+**常见的状态**：
+
+- 待机：没事做的时候，安静地待着
+- 倾听：用户在说话，桌宠在听
+- 说话：桌宠在回复用户
+- 开心：用户夸了桌宠，桌宠很开心
+- 难过：用户说了不好的话，桌宠难过
+- 生气：用户惹桌宠生气了
+- 惊讶：发生了意外的事
+- 思考：桌宠在想事情
+
+**状态转换规则**：
+
+状态之间可以互相转换，比如：
+
+- 待机 → 用户点击 → 开心
+- 待机 → 用户说话 → 倾听
+- 倾听 → AI 回复了 → 说话
+- 说话 → 说完了 → 待机
+- 待机 → 很久没互动 → 思考
+
+**状态对应动作**：
+
+每个状态对应一个动作：
+
+- 待机状态 → 播放待机动作
+- 开心状态 → 播放开心动作
+- 说话状态 → 播放说话动作
+- 思考状态 → 播放思考动作
+
+### 交互事件处理
+
+**鼠标点击**：
+
+当用户点击桌宠时：
+
+1. 判断点击了哪个部位（头、身体、手）
+2. 根据部位播放对应动作
+   - 点击头部 → 播放被摸头的动作
+   - 点击身体 → 播放被戳的动作
+   - 点击手 → 播放挥手的动作
+
+**鼠标拖拽**：
+
+当用户拖拽桌宠时：
+
+1. 根据拖拽的方向，让桌宠倾斜
+2. 向右拖 → 身体向右倾斜
+3. 向左拖 → 身体向左倾斜
+4. 向上拖 → 身体向上倾斜
+5. 向下拖 → 身体向下倾斜
+
+**鼠标悬停**：
+
+当鼠标在桌宠上方移动时：
+
+1. 桌宠的眼睛跟随鼠标移动
+2. 鼠标在左边 → 眼球向左看
+3. 鼠标在右边 → 眼球向右看
+4. 鼠标在上边 → 眼球向上看
+5. 鼠标在下边 → 眼球向下看
+
+### 情感引擎
+
+**什么是情感引擎？**
+
+情感引擎就是让桌宠有"情绪"，不是冷冰冰的机器。
+
+**情感类型**：
+
+- 开心
+- 难过
+- 生气
+- 惊讶
+
+**情感更新规则**：
+
+当发生某些事件时，情感值会变化：
+
+- 用户夸桌宠 → 开心值增加
+- 用户骂桌宠 → 生气值增加，难过值也增加
+- 发生意外的事 → 惊讶值增加
+
+**情感衰减**：
+
+情感不会一直保持，会慢慢消退：
+
+- 每一瞬间，情感值都会减少一点（比如减少 5%）
+- 这样桌宠就不会一直开心或一直生气
+
+**情感触发动作**：
+
+当某个情感值超过一定阈值时，触发对应动作：
+
+- 开心值 > 0.3 → 播放开心动作
+- 生气值 > 0.3 → 播放生气动作
+- 难过值 > 0.3 → 播放难过动作
+
+---
+
+## 六、智能工具调用
+
+### 工具调用流程
+
+整个流程是这样的：
+
+1. 用户输入一句话
+2. AI 判断需要使用什么工具
+3. 执行工具
+4. 工具执行成功后，桌宠播放对应动作
+5. 桌宠输出 AI 的回复
+
+### 工具举例
+
+**搜索网页工具**：
+
+- 功能：搜索网页
+- 使用场景：用户问"今天天气怎么样"
+- 执行过程：调用搜索 API，获取天气信息
+- 成功后的动作：播放"思考"动作（因为桌宠在查资料）
+
+**播放音乐工具**：
+
+- 功能：播放音乐
+- 使用场景：用户说"给我放首歌"
+- 执行过程：调用音乐播放器
+- 成功后的动作：播放"跳舞"动作（因为桌宠很开心）
+
+**设置提醒工具**：
+
+- 功能：设置提醒
+- 使用场景：用户说"提醒我明天开会"
+- 执行过程：调用提醒服务
+- 成功后的动作：播放"点头"动作（表示记住了）
+
+### AI 决策
+
+AI 如何决定使用哪个工具？
+
+1. 用户输入一句话
+2. 把这句话和可用工具列表一起发给 AI
+3. AI 判断需要使用哪个工具，返回工具名称和参数
+4. 程序根据 AI 的决策执行对应工具
+
+**举例**：
+
+用户说："帮我搜一下今天北京天气"
+
+AI 收到后，会这样思考：
+- 可用工具：搜索网页、播放音乐、设置提醒
+- 用户提到了"搜"，所以应该使用"搜索网页"工具
+- 参数：query = "今天北京天气"
+
+然后程序执行搜索工具，桌宠播放思考动作，最后把搜索结果告诉用户。
+
+---
+
+## 七、与 airi 项目集成（重要：你是在 airi 上直接开发）
+
+### 你的开发方式：直接修改 airi 源码
+
+你不是在做一个独立的桌宠项目，而是直接在 airi 项目的基础上开发。airi 的作者已经写好了一套完整的桌宠底层接口，你只需要在这些接口上添加你的功能。
+
+**airi 项目的位置**：`d:\project\achivememnt\airi`
+
+**桌宠相关的核心代码在**：`d:\project\achivememnt\airi\packages\stage-ui-live2d`
+
+**桌宠的前端界面在**：`d:\project\achivememnt\airi\apps\stage-tamagotchi`
+
+---
+
+### airi 已经提供的底层接口
+
+**1. Live2D 渲染器**
+
+- 位置：`packages/stage-ui-live2d/src/components/scenes/live2d/Model.vue`
+- 功能：加载和显示 Live2D 模型
+- 使用的库：pixi-live2d-display/cubism4
+- 你不需要自己实现渲染，airi 已经做好了
+
+**2. 权重控制系统（modelParameters）**
+
+- 位置：`packages/stage-ui-live2d/src/stores/live2d.ts`
+- 功能：控制模型的各个部位权重
+- 已有的参数：
+  - angleX、angleY、angleZ：头部左右、上下、倾斜转动
+  - leftEyeOpen、rightEyeOpen：左眼、右眼开合
+  - leftEyeSmile、rightEyeSmile：左眼、右眼微笑
+  - leftEyebrowLR、rightEyebrowLR：左眉、右眉左右移动
+  - leftEyebrowY、rightEyebrowY：左眉、右眉上下移动
+  - leftEyebrowAngle、rightEyebrowAngle：左眉、右眉角度
+  - leftEyebrowForm、rightEyebrowForm：左眉、右眉形状
+  - mouthOpen：嘴巴开合
+  - mouthForm：嘴巴形状
+  - cheek：脸红
+  - bodyAngleX、bodyAngleY、bodyAngleZ：身体左右、上下、旋转
+  - breath：呼吸
+
+- 你只需要修改这些参数的值，模型就会动
+
+**3. 动作管理系统（motion manager）**
+
+- 位置：`packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts`
+- 功能：管理动作的播放、混合、优先级
+- 已有的功能：
+  - 播放动作：model.motion(动作名称, 索引, 优先级)
+  - 停止动作：motionManager.stopAllMotions()
+  - 动作混合：多个动作同时播放
+  - 优先级控制：MotionPriority.FORCE（强制播放）
+
+**4. 情感映射系统（emotions）**
+
+- 位置：`packages/stage-ui-live2d/src/constants/emotions.ts`
+- 功能：把情感映射到对应的动作
+- 已有的情感：
+  - Happy（开心）→ Happy 动作
+  - Sad（难过）→ Sad 动作
+  - Angry（生气）→ Angry 动作
+  - Think（思考）→ Think 动作
+  - Surprise（惊讶）→ Surprise 动作
+  - Awkward（尴尬）→ Awkward 动作
+  - Question（疑问）→ Question 动作
+  - Curious（好奇）→ Curious 动作
+  - Neutral（中性）→ Idle 动作（待机）
+
+**5. 节拍同步控制器（beat-sync）**
+
+- 位置：`packages/stage-ui-live2d/src/composables/live2d/beat-sync.ts`
+- 功能：让模型跟着节拍晃动
+- 已有的风格：
+  - punchy-v：有力垂直晃动
+  - balanced-v：平衡垂直晃动
+  - swing-lr：左右摇摆
+  - sway-sine：正弦摇摆
+
+**6. 插件系统（motion-manager plugins）**
+
+- 位置：`packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts`
+- 功能：在动作更新时插入自定义逻辑
+- 已有的插件：
+  - useMotionUpdatePluginBeatSync：节拍同步
+  - useMotionUpdatePluginIdleDisable：禁用待机动作
+  - useMotionUpdatePluginIdleFocus：待机时眼睛跟随鼠标
+  - useMotionUpdatePluginAutoEyeBlink：自动眨眼
+
+---
+
+### 你的开发方式：在 airi 基础上添加功能
+
+**你需要做的是**：
+
+1. **修改 airi 的源码**：直接在 `packages/stage-ui-live2d` 和 `apps/stage-tamagotchi` 中添加你的代码
+2. **使用 airi 的接口**：调用 airi 已经提供的权重控制、动作管理、情感映射等接口
+3. **添加你的逻辑**：在 airi 的基础上添加状态机、情感引擎、工具调用等功能
+
+**你不需要做的是**：
+
+1. **不需要自己实现 Live2D 渲染**：airi 已经用 pixi-live2d-display 做好了
+2. **不需要自己实现权重控制**：airi 已经有 modelParameters store
+3. **不需要自己实现动作管理**：airi 已经有 motion manager
+4. **不需要自己安装 Cubism SDK**：airi 已经集成了 pixi-live2d-display/cubism4
+
+---
+
+### 与 houduan 代理集成
+
+你的 houduan 代理已经实现了智能路由、记忆系统等功能。桌宠需要通过 airi 的接口来对接 houduan。
+
+**对接流程**：
+
+1. 用户在 airi 的桌宠界面输入一句话
+2. airi 的桌宠进入"倾听"状态，播放倾听动作（通过调用 airi 的 motion 接口）
+3. airi 把这句话发送到 houduan 代理（通过 HTTP 请求或 WebSocket）
+4. houduan 代理处理这句话（智能路由、记忆检索等）
+5. houduan 代理返回 AI 的回复
+6. airi 的桌宠进入"说话"状态，播放说话动作（通过调用 airi 的 motion 接口）
+7. airi 的桌宠输出 AI 的回复（文字或语音）
+
+**具体实现方式**：
+
+- 在 `apps/stage-tamagotchi` 中添加一个服务，负责和 houduan 代理通信
+- 当用户输入消息时，调用这个服务发送消息到 houduan
+- 当收到 houduan 的回复时，调用 airi 的 motion 接口播放说话动作
+- 同时更新 airi 的 modelParameters 来调整表情（比如开心时设置 mouthForm 为微笑）
+
+---
+
+### 与记忆系统集成
+
+桌宠可以读取用户的记忆，让交互更个性化。
+
+**加载记忆**：
+
+1. 桌宠启动时，从 houduan 代理加载用户的记忆（通过 HTTP 请求）
+2. 根据记忆中的"亲密度"调整桌宠的性格
+   - 亲密度高 → 桌宠更热情（设置 modelParameters 的 mouthForm 为微笑，cheek 为脸红）
+   - 亲密度低 → 桌宠更礼貌（设置 modelParameters 的 mouthForm 为中性）
+
+**记录交互**：
+
+1. 每次用户和桌宠对话后，记录这次交互
+2. 把交互记录发送到 houduan 代理的记忆系统（通过 HTTP 请求）
+3. 记忆系统会压缩、提纯这些记录，更新长期记忆
+
+---
+
+## 八、开发步骤（基于 airi 项目）
+
+### 第一阶段：熟悉 airi 的桌宠接口
+
+**目标**：了解 airi 已经提供了哪些接口，如何使用这些接口。
+
+**步骤**：
+
+1. **阅读 airi 的桌宠代码**
+   - 阅读 `packages/stage-ui-live2d/src/stores/live2d.ts`：了解权重控制系统
+   - 阅读 `packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts`：了解动作管理系统
+   - 阅读 `packages/stage-ui-live2d/src/constants/emotions.ts`：了解情感映射系统
+   - 阅读 `packages/stage-ui-live2d/src/components/scenes/live2d/Model.vue`：了解模型加载和渲染
+
+2. **测试 airi 的接口**
+   - 启动 airi 项目，看看桌宠是否能正常显示
+   - 尝试修改 modelParameters 的值，看看模型是否会动
+   - 尝试调用 model.motion() 方法，看看是否能播放动作
+   - 尝试修改 currentMotion，看看是否能切换情感
+
+3. **理解 airi 的架构**
+   - airi 使用 Vue 3 作为前端框架
+   - airi 使用 Pinia 作为状态管理（store）
+   - airi 使用 pixi-live2d-display 作为 Live2D 渲染器
+   - airi 使用 Electron 作为桌面应用框架
+
+### 第二阶段：在 airi 基础上添加交互逻辑
+
+**目标**：让桌宠能响应用户的各种操作。
+
+**步骤**：
+
+1. **添加状态机**
+   - 在 `apps/stage-tamagotchi` 中创建一个新的 store，用于管理桌宠的状态
+   - 定义所有状态（待机、倾听、说话、开心等）
+   - 定义状态转换规则（什么情况下从哪个状态转到哪个状态）
+   - 当状态变化时，调用 airi 的 motion 接口播放对应动作
+
+2. **添加情感系统**
+   - 在同一个 store 中添加情感值（开心、难过、生气、惊讶）
+   - 当发生某些事件时，更新情感值
+   - 当情感值超过一定阈值时，调用 airi 的 motion 接口播放对应动作
+   - 同时更新 airi 的 modelParameters 来调整表情
+
+3. **添加鼠标交互**
+   - 在 `apps/stage-tamagotchi` 的桌宠组件中添加鼠标事件监听
+   - 点击时：调用 airi 的 motion 接口播放点击动作
+   - 拖拽时：更新 airi 的 modelParameters 的 bodyAngleX、bodyAngleY 来倾斜身体
+   - 悬停时：更新 airi 的 modelParameters 的 angleX、angleY 来让头部跟随鼠标
+
+### 第三阶段：对接 houduan 代理和工具调用
+
+**目标**：让桌宠能智能对话，能调用工具。
+
+**步骤**：
+
+1. **创建 houduan 客户端**
+   - 在 `apps/stage-tamagotchi` 中创建一个新的服务，负责和 houduan 代理通信
+   - 实现消息发送：把用户的话发给 houduan
+   - 实现响应接收：接收 houduan 返回的 AI 回复
+
+2. **对接对话流程**
+   - 当用户输入消息时：
+     - 更新桌宠状态为"倾听"
+     - 调用 airi 的 motion 接口播放倾听动作
+     - 发送消息到 houduan
+   - 当收到 houduan 的回复时：
+     - 更新桌宠状态为"说话"
+     - 调用 airi 的 motion 接口播放说话动作
+     - 更新 airi 的 modelParameters 的 mouthOpen 来模拟口型
+     - 显示 AI 的回复
+
+3. **实现工具调用**
+   - 在 houduan 代理中注册可用工具（搜索、音乐、提醒等）
+   - 当 houduan 返回工具调用指令时：
+     - 执行工具
+     - 工具执行成功后，调用 airi 的 motion 接口播放对应动作
+     - 把工具的结果告诉用户
+
+4. **对接记忆系统**
+   - 桌宠启动时，从 houduan 加载用户记忆
+   - 根据记忆调整桌宠的性格（更新 modelParameters）
+   - 每次交互后，把交互记录发送到 houduan 的记忆系统
+
+---
+
+## 九、关键技术点（airi 已实现的）
+
+### Live2D 渲染器（airi 已实现）
+
+- 位置：`packages/stage-ui-live2d/src/components/scenes/live2d/Model.vue`
+- 使用的库：pixi-live2d-display/cubism4
+- 功能：
+  - 加载模型文件（支持 zip 格式）
+  - 渲染模型到屏幕上
+  - 设置参数权重
+  - 播放动画
+- 你不需要自己实现这些底层功能，只需要调用 airi 提供的接口
+
+### 权重控制器（airi 已实现）
+
+- 位置：`packages/stage-ui-live2d/src/stores/live2d.ts`
+- 功能：
+  - 记录当前的权重值（modelParameters）
+  - 记录目标的权重值
+  - 每帧更新时，让当前权重慢慢接近目标权重
+  - 把更新后的权重应用到模型上
+- 你只需要修改 modelParameters 的值，airi 会自动处理平滑过渡
+
+### 动作混合器（airi 已实现）
+
+- 位置：`packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts`
+- 功能：
+  - 记录当前正在播放的所有动作
+  - 每个动作有一个优先级
+  - 混合所有动作的权重（按优先级加权）
+  - 输出混合后的最终权重
+- 你只需要调用 model.motion() 方法，airi 会自动处理动作混合
+
+### 插件系统（airi 已实现）
+
+- 位置：`packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts`
+- 功能：
+  - 在动作更新时插入自定义逻辑
+  - 支持 pre 插件（在动作更新前执行）
+  - 支持 post 插件（在动作更新后执行）
+- 你可以注册自己的插件来扩展功能
+
+---
+
+## 十、文件结构（基于 airi 项目）
+
+你的桌宠开发会涉及到 airi 项目的这些文件：
+
+**airi 已有的核心层**（你不需要修改，只需要使用）：
+- `packages/stage-ui-live2d/src/components/scenes/live2d/Model.vue`：Live2D 渲染器
+- `packages/stage-ui-live2d/src/stores/live2d.ts`：权重控制器（modelParameters）
+- `packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts`：动作混合器
+- `packages/stage-ui-live2d/src/composables/live2d/beat-sync.ts`：节拍同步控制器
+- `packages/stage-ui-live2d/src/constants/emotions.ts`：情感映射系统
+
+**你需要添加的逻辑层**（在 apps/stage-tamagotchi 中创建）：
+- `apps/stage-tamagotchi/src/renderer/stores/pet-state.ts`：状态机（管理桌宠的状态）
+- `apps/stage-tamagotchi/src/renderer/stores/pet-emotion.ts`：情感引擎（管理情感值）
+- `apps/stage-tamagotchi/src/renderer/composables/use-pet-interaction.ts`：交互处理器（处理用户操作）
+- `apps/stage-tamagotchi/src/renderer/services/houduan-client.ts`：houduan 代理客户端
+
+**你需要添加的工具层**（在 apps/stage-tamagotchi 中创建）：
+- `apps/stage-tamagotchi/src/renderer/services/tool-registry.ts`：工具注册表
+- `apps/stage-tamagotchi/src/renderer/services/web-search.ts`：网页搜索工具
+- `apps/stage-tamagotchi/src/renderer/services/music-player.ts`：音乐播放器
+- `apps/stage-tamagotchi/src/renderer/services/reminder.ts`：提醒工具
+
+**airi 已有的资源层**（你不需要修改）：
+- `packages/stage-ui-live2d/src/assets/live2d/models/`：存放 Live2D 模型文件
+- `packages/stage-ui-live2d/src/assets/live2d/motions/`：存放动作文件
+
+---
+
+## 十一、核心公式总结（airi 已实现的）
+
+**权重计算**（airi 已实现）：
+最终权重 = 所有动作的权重 × 各自的优先级，然后加起来
+- 位置：`packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts`
+
+**情感衰减**（你需要自己实现）：
+情感值 = 情感值 × 0.95（每一瞬间减少 5%）
+- 位置：`apps/stage-tamagotchi/src/renderer/stores/pet-emotion.ts`（你需要创建）
+
+**平滑过渡**（airi 已实现）：
+新权重 = 当前权重 + (目标权重 - 当前权重) × 过渡速度
+- 位置：`packages/stage-ui-live2d/src/stores/live2d.ts`（watch 监听 modelParameters 变化）
+
+**动作混合**（airi 已实现）：
+混合权重 = (动作1权重 × 优先级1 + 动作2权重 × 优先级2 + ...) ÷ 总优先级
+- 位置：`packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts`
+
+**节拍同步**（airi 已实现）：
+使用半隐式欧拉方法计算物理运动
+- 位置：`packages/stage-ui-live2d/src/composables/live2d/beat-sync.ts`
+
+---
+
+## 十二、开发注意事项
+
+**性能优化**：
+- airi 已经使用 pixi-live2d-display 进行 WebGL 加速渲染
+- airi 已经使用 requestAnimationFrame 保持 60fps 的帧率
+- 你只需要确保你的逻辑层代码不要太复杂，避免拖慢性能
+
+**兼容性**：
+- airi 使用 Electron 作为桌面应用框架，所以不需要考虑浏览器兼容性
+- airi 已经处理了 Windows、macOS、Linux 的兼容性问题
+
+**用户体验**：
+- airi 已经提供了桌宠大小调整功能（通过 scale 参数）
+- airi 已经支持拖拽移动位置（通过 position 参数）
+- airi 已经提供了设置界面（在 `apps/stage-tamagotchi/src/renderer/pages/settings/`）
+
+**开发规范**：
+- 使用 Vue 3 的 Composition API
+- 使用 Pinia 进行状态管理
+- 使用 TypeScript 进行类型检查
+- 遵循 airi 项目的代码风格
+
+---
+
+## 十三、下一步行动
+
+1. **阅读 airi 的桌宠代码**：了解 airi 已经提供了哪些接口
+2. **启动 airi 项目**：看看桌宠是否能正常显示
+3. **测试 airi 的接口**：尝试修改 modelParameters 的值，看看模型是否会动
+4. **添加状态机**：在 apps/stage-tamagotchi 中创建一个新的 store
+5. **添加情感系统**：在同一个 store 中添加情感值
+6. **对接 houduan**：创建一个服务，负责和 houduan 代理通信
+7. **实现工具调用**：在 houduan 代理中注册可用工具
+
+---
+
+**记住：你是在 airi 项目上直接开发，不是在做一个独立的项目。airi 已经提供了完整的底层接口，你只需要在这些接口上添加你的逻辑。**
+
+**简单来说就是**：
+- airi 已经提供了：Live2D 渲染器、权重控制器、动作混合器、情感映射系统
+- 你需要添加的是：状态机、情感引擎、houduan 客户端、工具调用
+- 你的工作方式是：直接修改 airi 的源码，在 apps/stage-tamagotchi 中添加你的代码
+- 你不需要做的是：自己实现 Live2D 渲染、权重控制、动作管理
