@@ -1,0 +1,313 @@
+# 代码架构 - 分层设计
+
+## 一、整体分层架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Frontend Layer (airi前端)                        │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                 │
+│  │  Web UI      │  │  macOS UI    │  │  Windows UI  │                 │
+│  │  (5173)      │  │  (Tauri)     │  │  (Tauri)     │                 │
+│  └──────────────┘  └──────────────┘  └──────────────┘                 │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+         ┌───────────────────────┼───────────────────────┐
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   直连模式      │     │   代理模式 🔴   │     │   热插拔层      │
+│   (6112)       │     │   (5137)        │     │   (hot-swap)    │
+│   Docker后端   │     │   透明代理      │     │   自定义逻辑    │
+└─────────────────┘     └────────┬────────┘     └────────┬────────┘
+                                │                       │
+                                │              ┌────────┴────────┐
+                                │              │                 │
+                                ▼              ▼                 ▼
+                    ┌─────────────────┐ ┌─────────────┐ ┌─────────────┐
+                    │   智能路由层     │ │ 本地模型层   │ │ 记忆系统层  │
+                    │ (local.model/)  │ │ (Ollama)    │ │ (文件存储)  │
+                    │ • 关键词匹配    │ │ • 快速响应   │ │ • 短期记忆  │
+                    │ • 学习词库      │ │ • <2秒响应   │ │ • 中期记忆  │
+                    │ • 本地模型判断  │ │ • 脱敏润色   │ │ • 长期记忆  │
+                    └────────┬────────┘ └─────────────┘ └─────────────┘
+                             │                       │
+                             │              ┌────────┴────────┐
+                             │              │                 │
+                             ▼              ▼                 ▼
+                    ┌─────────────────────────────────────────────────┐
+                    │                   云端代工厂                      │
+                    │  ┌─────────────┐  ┌─────────────┐  ┌───────────┐ │
+                    │  │ 阿里云百炼   │  │  DeepSeek   │  │  其他API  │ │
+                    │  │ (快速处理)  │  │ (深度处理)  │  │           │ │
+                    │  └─────────────┘  └─────────────┘  └───────────┘ │
+                    └─────────────────────────────────────────────────┘
+```
+
+---
+
+## 二、代理层架构 (proxy/index.ts)
+
+```
+代理层 (5137)
+├── HTTP Server (Express)
+│   ├── CORS 配置
+│   ├── JSON 解析 (10mb limit)
+│   └── 请求日志
+│
+├── WebSocket Server (Socket.IO)
+│   └── 实时通信代理
+│
+├── 热插拔钩子调用
+│   ├── onInit()           → 初始化
+│   ├── onMessage()        → 消息处理 (核心)
+│   ├── onConversationStart()
+│   ├── onConversationEnd()
+│   └── onDestroy()        → 销毁
+│
+└── 路由决策
+    ├── 关键词匹配 (keyword-db)
+    ├── 学习词库 (learned-db)
+    └── 本地模型判断 (local-judge)
+```
+
+---
+
+## 三、热插拔插槽 (hot-swap.ts)
+
+```typescript
+/**
+ * 热插拔插槽接口 - houduan
+ * 这是你的代码与 Airi 之间的"插槽"
+ */
+
+export interface HotSwapMessage {
+  id: string
+  type: 'user' | 'ai'
+  content: string
+  timestamp: number
+}
+
+export interface HotSwapResult {
+  content: string
+  modified: boolean
+  metadata?: Record<string, any>
+}
+
+// 核心导出函数
+export async function onMessage(message: HotSwapMessage): Promise<HotSwapResult>
+export async function onInit(): Promise<void>
+export async function onDestroy(): Promise<void>
+export async function onConversationStart(conversationId: string): Promise<void>
+export async function onConversationEnd(conversationId: string): Promise<void>
+```
+
+**使用方式**：
+| 模式 | 是否加载 |
+|------|----------|
+| 直连模式 (direct.bat) | ❌ 不加载 |
+| 代理模式 (proxy.bat) | ✅ 自动加载 |
+
+---
+
+## 四、智能路由架构 (local.model/)
+
+```
+local.model/
+├── router.ts          # 核心路由引擎
+│   ├── route()        # 主路由方法
+│   ├── keywordMatch()  # 关键词匹配
+│   ├── learnedMatch()  # 学习词库匹配
+│   └── modelJudge()    # 本地模型判断
+│
+├── keyword-db.ts      # 关键词数据库
+│   └── matchKeyword() # 毫秒级匹配
+│
+├── learned-db.ts      # 学习词库
+│   ├── matchLearned()  # 已学习短语匹配
+│   ├── learnPhrase()   # 学习新短语
+│   └── promoteToKeyword() # 提升为关键词
+│
+├── local-judge.ts     # 本地模型判断器
+│   ├── start()        # 启动后台判断
+│   ├── stop()         # 停止
+│   └── scorePhrase()  # 评分短语复杂度
+│
+└── index.ts           # 统一导出
+```
+
+**路由决策流程**：
+```
+用户消息
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│  竞速机制：三方并行                                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌───────────┐  │
+│  │ 关键词匹配   │  │ 学习词库    │  │ 本地模型  │  │
+│  │ (10ms)      │  │ (10ms)     │  │ (3秒)     │  │
+│  └──────┬──────┘  └──────┬──────┘  └─────┬─────┘  │
+│         │                │                │         │
+│         └────────────────┼────────────────┘         │
+│                          ▼                          │
+│                   选举胜出者                        │
+│                   作为路由目标                       │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+## 五、后端架构 (backend/)
+
+```
+backend/
+├── src/
+│   ├── app.ts              # Hono 应用入口
+│   │
+│   ├── api/                # API Schema 定义
+│   │   ├── characters.schema.ts
+│   │   ├── chats.schema.ts
+│   │   └── providers.schema.ts
+│   │
+│   ├── routes/             # 路由处理
+│   │   ├── characters.ts
+│   │   ├── chats.ts
+│   │   └── providers.ts
+│   │
+│   ├── services/           # 业务逻辑
+│   │   ├── characters.ts
+│   │   ├── chats.ts
+│   │   └── providers.ts
+│   │
+│   ├── schemas/            # 数据模型
+│   │   ├── accounts.ts
+│   │   ├── auth.ts
+│   │   ├── characters.ts
+│   │   ├── chats.ts
+│   │   ├── providers.ts
+│   │   └── user-character.ts
+│   │
+│   ├── middlewares/        # 中间件
+│   │   ├── auth.ts
+│   │   └── otel.ts
+│   │
+│   ├── libs/               # 库文件
+│   │   ├── auth.ts
+│   │   ├── db.ts
+│   │   ├── env.ts
+│   │   ├── mock-db.ts
+│   │   └── otel.ts
+│   │
+│   ├── types/              # 类型定义
+│   │   ├── character-avatar-model.ts
+│   │   ├── character-capability.ts
+│   │   └── hono.ts
+│   │
+│   ├── utils/              # 工具函数
+│   │   ├── error.ts
+│   │   ├── id.ts
+│   │   └── origin.ts
+│   │
+│   └── scripts/             # 脚本
+│       └── auth.ts
+│
+├── test/                   # 测试文件
+│   ├── dialogue-processor.ts
+│   ├── example.ts
+│   ├── memory-manager.ts
+│   ├── personality-system.ts
+│   └── types.ts
+│
+├── sql/
+│   └── init.sql            # 数据库初始化
+│
+├── docker-compose.yml       # Docker 配置
+└── package.json
+```
+
+---
+
+## 六、数据层
+
+```
+数据存储
+├── SQLite (中期记忆)
+│   └── 话题精华摘要，按话题分类
+│
+├── JSON 文件 (长期记忆)
+│   ├── memory_archive.json     # 完整存档
+│   ├── personality.json        # 人格配置
+│   ├── background.json         # 背景文件(精简)
+│   └── learned-db.json         # 学习词库
+│
+├── 本地模型配置
+│   └── 提示词文件 (<60字)
+│
+└── 可选
+    ├── Vector DB (pgvector) # 向量数据库
+    └── 冷存储 (cold_storage)# 归档旧记忆
+```
+
+---
+
+## 七、关键代码流程
+
+### 7.1 消息处理流程
+
+```typescript
+// 1. 代理收到消息
+proxy.on('message', handleMessage)
+
+// 2. 调用热插拔钩子
+const result = await onMessage(message)
+
+// 3. 智能路由决策
+const routeResult = await smartRouter.route(message)
+
+// 4. 根据路由目标分发
+switch (routeResult.target) {
+  case 'local':
+    return await callLocalModel(message)      // 本地模型
+  case 'cloud-quick':
+    return await callCloudQuick(message)      // 云端快速
+  case 'cloud-deep':
+    return await callCloudDeep(message)       // 云端深度
+}
+
+// 5. 结果处理
+if (routeResult.target === 'cloud-deep') {
+  await refineAndArchive(response)  // 深度处理后存档
+}
+```
+
+### 7.2 记忆更新流程
+
+```
+短期记忆 (对话中)
+    │ 达到阈值
+    ▼
+中期记忆 (话题摘要) ──→ 云端提炼 ──→ 存档
+    │                            │
+    │                            ▼
+    │                     背景文件 (精简版)
+    │                            │
+    │                            ▼
+    │                     长期记忆 (大脑)
+    │                            │
+    ◄────────────────────────────┘
+```
+
+---
+
+## 八、关键设计模式
+
+### 8.1 竞速机制
+三方并行处理，返回最快结果
+
+### 8.2 热插拔插槽
+通过接口契约实现模块动态加载
+
+### 8.3 学习机制
+自动积累路由判断结果到 learned-db
+
+### 8.4 三级记忆漏斗
+RAM → SQLite → JSON 层层递进
