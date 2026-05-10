@@ -1,6 +1,0 @@
-参数	值
-主机	localhost
-端口	5435
-数据库	postgres
-用户名	postgres
-密码	example-PAssw0rd-xHjDYR.b7N
